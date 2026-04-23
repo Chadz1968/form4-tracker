@@ -1,9 +1,31 @@
+# Secrets
 .env
+
+# Runtime output
+trade_log.json
+trade_log.csv
+daily_summaries.json
+*.log
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual envs
 venv/
 .venv/
-trade_log.json
-trade_log.csv
-*.log
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
