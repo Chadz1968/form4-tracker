@@ -27,14 +27,50 @@ for retail and small enough to be credible.
 
 ## Status
 
-Day 1. Nothing built yet. Currently exploring EDGAR's Form 4 data format
-before committing to an architecture.
+**Phase 1 — Signal scanner complete.**
+
+A working EDGAR Form 4 scanner (`explore_form4.py`) is operational. It pulls
+filings for a given date, applies a multi-stage filter pipeline, detects
+cluster buys, and outputs ranked signals. Seasonal sampling across four
+calendar windows (late Jan, Apr, Jul, Oct) has been validated.
+
+### Empirical findings from initial sampling
+
+- The scanner produces **5–18 qualifying signals per day** after all filters.
+- **Cluster buys are rare (0–2 per day)** but appear to be higher quality —
+  multiple insiders at the same company buying on the same day is a stronger
+  signal than any single purchase.
+- **Regional banks and financial companies dominate the signal population.**
+  Small-cap financials file more Form 4 purchases than any other sector, which
+  means naive follow-all strategies will be heavily sector-concentrated unless
+  an explicit sector cap is applied.
+
+Next: backtest pipeline against historical price data to test holding-period
+hypotheses, and evaluate whether cluster buys carry significantly different
+forward returns than single buys.
+
+## Filter Pipeline (`explore_form4.py`)
+
+Filters applied in order:
+
+| # | Filter | Rule |
+|---|---|---|
+| 1 | Has purchase transactions | Filing must contain at least one `Code=P` trade |
+| 2 | Genuine corporate insider | Position must match known executive roles; no institutional filers |
+| 3 | Valid listed ticker | 1–5 uppercase letters, no placeholders |
+| 4 | Not a fund or partnership | Excludes names containing `fund`, `trust`, `lp`, `llc`, `reit`, etc. |
+| 5 | Filing recency | Reporting period must be within `MAX_FILING_AGE_DAYS` of scan date |
+| 6 | Minimum dollar size | Total purchase value ≥ `MIN_PURCHASE_VALUE` |
+| 7 | Minimum stock price | Average purchase price ≥ `MIN_STOCK_PRICE` (penny stock filter) |
+
+After filtering, purchases are grouped by ticker. Tickers with ≥ 2 insiders
+buying on the same day are flagged as **cluster buys** and printed first.
 
 ## Planned Architecture
 
 Agent pipeline (same pattern as the predecessor project):
 
-- **finder** — pull Form 4 filings from EDGAR, filter to buys on S&P 500 tickers
+- **finder** — pull Form 4 filings from EDGAR, filter to buys on listed tickers
 - **filter** — apply signal-quality rules (role, cluster detection, size)
 - **risk** — position sizing and drawdown management
 - **reflector** — trade logging and post-mortem analysis
@@ -71,12 +107,20 @@ python -c "from config import get_trading_client; print(get_trading_client().get
 
 ## Configuration
 
-Strategy constants are in `config.py`:
+Scanner constants in `explore_form4.py`:
+
+| Constant | Default | Description |
+|---|---|---|
+| `MIN_PURCHASE_VALUE` | `50_000` | Minimum total dollar value of purchases |
+| `MIN_STOCK_PRICE` | `2.00` | Minimum average purchase price (penny stock filter) |
+| `MAX_FILING_AGE_DAYS` | `5` | Maximum days between reporting period and scan date |
+| `SCAN_DATE` | — | Target filing date (YYYY-MM-DD) |
+
+Strategy constants in `config.py`:
 
 | Constant | Default | Description |
 |---|---|---|
 | `TRADING_MODE` | `"paper"` | Set to `"live"` only after backtest validation |
-| `GAP_THRESHOLD` | `0.02` | Minimum gap size to qualify a candidate |
 | `MAX_TRADES_PER_DAY` | `5` | Daily trade cap |
 | `RISK_PER_TRADE` | `0.01` | Fraction of equity risked per trade |
 | `MAX_DRAWDOWN` | `0.05` | Drawdown limit before trading halts |
