@@ -1,16 +1,32 @@
-from edgar import set_identity, get_filings
-from datetime import datetime, date, timedelta
 import re
+import argparse
+from datetime import datetime
+from edgar import set_identity, get_filings
 
+# ── Identity (required by EDGAR) ─────────────────────────────
 set_identity("Mark Chadwick chadwick_mark@hotmail.com")
+
+# ── Command line arguments ────────────────────────────────────
+parser = argparse.ArgumentParser(
+    description="Scan EDGAR Form 4 filings for insider purchases"
+)
+parser.add_argument(
+    "--date",
+    default="2025-04-28",
+    help="Scan date in YYYY-MM-DD format"
+)
+args = parser.parse_args()
+
+SCAN_DATE    = args.date
+SCAN_YEAR    = int(SCAN_DATE[:4])
+SCAN_MONTH   = int(SCAN_DATE[5:7])
+SCAN_QUARTER = (SCAN_MONTH - 1) // 3 + 1
 
 # ── Configuration ────────────────────────────────────────────
 MIN_PURCHASE_VALUE  = 50_000
 MIN_STOCK_PRICE     = 2.00      # filter penny stocks
 MAX_FILING_AGE_DAYS = 5         # filter stale filings
-SCAN_DATE           = "2025-04-28"
-SCAN_YEAR           = 2025
-SCAN_QUARTER        = 2
+
 
 INSIDER_ROLES = [
     "ceo", "cfo", "president", "chairman", "director",
