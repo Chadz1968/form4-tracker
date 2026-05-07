@@ -12,7 +12,9 @@ Differences from the gap-fade predecessor:
   - Bracket order child legs persist GTC until one fills
 """
 
+import json
 import math
+import os
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -30,6 +32,8 @@ from config import (
 )
 
 TARGET_MULT = 2.0   # take-profit at 2:1 reward-to-risk
+_DIR        = os.path.dirname(os.path.abspath(__file__))
+HWM_FILE    = os.path.join(_DIR, "hwm.json")
 
 
 def _get_account(client: TradingClient) -> dict:
@@ -40,9 +44,23 @@ def _get_account(client: TradingClient) -> dict:
     }
 
 
+def _load_hwm(current_equity: float) -> float:
+    """Return the all-time high-water mark, updating the file if equity is a new peak."""
+    if os.path.exists(HWM_FILE):
+        with open(HWM_FILE) as f:
+            stored = json.load(f).get("hwm", 0.0)
+    else:
+        stored = 0.0
+    peak = max(stored, current_equity)
+    if peak > stored:
+        with open(HWM_FILE, "w") as f:
+            json.dump({"hwm": peak}, f)
+    return peak
+
+
 def _drawdown_ok(account: dict) -> tuple[bool, float]:
     equity = account["equity"]
-    peak   = max(equity, account["last_equity"])
+    peak   = _load_hwm(equity)
     dd     = (peak - equity) / peak if peak > 0 else 0.0
     return dd < MAX_DRAWDOWN, round(dd, 4)
 

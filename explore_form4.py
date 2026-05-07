@@ -6,16 +6,22 @@ Usage:
 """
 
 import argparse
+import datetime
+
+import config
 from filter_agent import run
 
-parser = argparse.ArgumentParser(
-    description="Scan EDGAR Form 4 filings for insider purchases"
-)
-parser.add_argument(
-    "--date",
-    default="2025-04-28",
-    help="Scan date in YYYY-MM-DD format",
-)
-args = parser.parse_args()
+if __name__ == "__main__":
+    config.validate()
 
-run(args.date)
+    parser = argparse.ArgumentParser(
+        description="Scan EDGAR Form 4 filings for insider purchases"
+    )
+    parser.add_argument(
+        "--date",
+        default=datetime.date.today().isoformat(),
+        help="Scan date in YYYY-MM-DD format",
+    )
+    args = parser.parse_args()
+
+    run(args.date)

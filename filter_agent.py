@@ -16,6 +16,7 @@ Filters applied (in order):
 
 import re
 import argparse
+import datetime as dt
 from datetime import datetime
 
 from finder_agent import fetch_raw_trades
@@ -57,7 +58,7 @@ def is_fund_like(company_name: str) -> bool:
     return any(kw in name_lower for kw in FUND_KEYWORDS)
 
 
-def get_avg_price(p_trades) -> float:
+def _value_and_avg(p_trades) -> tuple[float, float]:
     total_value  = 0.0
     total_shares = 0.0
     for _, row in p_trades.iterrows():
@@ -66,7 +67,8 @@ def get_avg_price(p_trades) -> float:
             total_shares += float(row["Shares"])
         except (TypeError, ValueError):
             pass
-    return total_value / total_shares if total_shares else 0.0
+    avg = total_value / total_shares if total_shares else 0.0
+    return total_value, avg
 
 
 def filter_trades(raw_trades, scan_date: str):
@@ -96,13 +98,8 @@ def filter_trades(raw_trades, scan_date: str):
             continue
 
         # Filter 5 & 6: dollar size and stock price
-        p_trades    = trade["p_trades"]
-        total_value = sum(
-            float(r["Shares"]) * float(r["Price"])
-            for _, r in p_trades.iterrows()
-            if r["Price"] and r["Shares"]
-        )
-        avg_price = get_avg_price(p_trades)
+        p_trades              = trade["p_trades"]
+        total_value, avg_price = _value_and_avg(p_trades)
 
         if total_value < MIN_PURCHASE_VALUE:
             continue
@@ -182,7 +179,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--date",
-        default="2025-04-28",
+        default=dt.date.today().isoformat(),
         help="Scan date in YYYY-MM-DD format",
     )
     args = parser.parse_args()

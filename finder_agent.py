@@ -17,7 +17,9 @@ Yields dicts with keys:
 
 from edgar import set_identity, get_filings
 
-set_identity("Mark Chadwick chadwick_mark@hotmail.com")
+from config import EDGAR_USER_AGENT
+
+set_identity(EDGAR_USER_AGENT)
 
 
 def fetch_raw_trades(scan_date: str):
@@ -79,7 +81,8 @@ def fetch_raw_trades(scan_date: str):
                 "p_trades":  p_trades,
             }
 
-        except Exception:
+        except Exception as e:
+            print(f"[Finder] Skipped filing (accession={accession}): {type(e).__name__}: {e}")
             continue
 
     print(f"[Finder] Done — checked {checked} filings, {found} had P-trades.")

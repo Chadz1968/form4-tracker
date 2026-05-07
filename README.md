@@ -27,14 +27,15 @@ for retail and small enough to be credible.
 
 ## Status
 
-**Phase 1 — Signal scanner complete. Agent pipeline partially built.**
+**Phase 1 — Full agent pipeline built. Paper trading active.**
 
 | Agent | File | Status |
 |---|---|---|
 | Finder | `finder_agent.py` | Done |
 | Filter | `filter_agent.py` | Done |
-| Risk | `risk_agent.py` | In progress — not yet wired to Form 4 flow |
-| Reflector | `reflector_agent.py` | In progress — not yet wired to Form 4 flow |
+| LLM Scorer | `llm_filter_agent.py` | Done |
+| Risk | `risk_agent.py` | Done |
+| Reflector | `reflector_agent.py` | Done |
 
 ### Empirical findings from initial sampling
 
@@ -54,8 +55,8 @@ forward returns than single buys.
 ## Agent Architecture
 
 ```
-finder_agent  →  filter_agent  →  risk_agent  →  reflector_agent
-   (EDGAR)         (signals)       (sizing)         (log + learn)
+finder_agent  →  filter_agent  →  llm_filter_agent  →  risk_agent  →  reflector_agent
+   (EDGAR)         (signals)          (LLM scoring)      (sizing)       (log + learn)
 ```
 
 ### finder_agent.py
@@ -71,22 +72,39 @@ accession, ticker, company, insider, position, period, p_trades
 
 Receives raw trade dicts from the finder and applies the signal-quality filter
 pipeline (see below). Qualifying purchases are grouped by ticker; tickers with
-≥ 2 insiders buying on the same day are flagged as **cluster buys** and printed
-first. Also serves as the CLI entry point.
+≥ 2 insiders buying on the same day are flagged as **cluster buys**.
+Also serves as the CLI entry point when run directly.
 
-### risk_agent.py *(in progress)*
+### llm_filter_agent.py
+
+Scores qualifying signals across five dimensions using a mix of deterministic
+Python logic and GPT-4o structured output:
+
+| Dimension | Weight | Method |
+|---|---|---|
+| Conviction | 25% | LLM — purchase size vs. estimated role compensation |
+| Timing | 25% | LLM — buying into price weakness (contrarian) |
+| Role | 20% | Deterministic — CEO/CFO/Chairman score higher |
+| Cluster | 15% | Deterministic — multiple insiders amplifies conviction |
+| Thesis | 15% | LLM — sector-aware valuation and context |
+
+Each dimension scores 1–3; composite is normalised to 1–10. Signals below
+`MIN_LLM_SCORE` (default 4.0) are dropped before position sizing.
+
+### risk_agent.py
 
 Position sizing and drawdown management via Alpaca paper-trading API:
 - 1% of account equity risked per trade
-- Hard stop at 10% cumulative drawdown
-- Bracket orders (entry + stop-loss + take-profit submitted together)
+- Hard stop at 10% cumulative drawdown (measured from all-time equity peak)
+- Stop: 12% below entry; target: 24% above entry (2:1 R/R)
+- Bracket orders (entry + stop-loss + take-profit submitted together, children GTC)
 
-### reflector_agent.py *(in progress)*
+### reflector_agent.py
 
 End-of-day trade reconciliation and LLM post-mortem:
-- Persists each trade to `trade_log.json`
-- Reconciles exits against Alpaca fill prices at day close
-- Calls OpenAI to generate coaching insights from the day's trades
+- Persists each trade to `trade_log.json` at entry
+- Reconciles exits against Alpaca bracket-leg fills at day close
+- Calls GPT-4o-mini to generate coaching insights from the day's trades
 - Appends daily summary to `daily_summaries.json`
 
 ## Filter Pipeline
@@ -106,12 +124,17 @@ Filters applied in order inside `filter_agent.py`:
 ## Usage
 
 ```bash
-# Canonical entry point
+# Full pipeline: scan → filter → LLM score → size → order
+python explore_form4.py
+
+# Scan and filter only (no LLM, no trading)
 python filter_agent.py --date 2025-04-28
 
-# Legacy wrapper (same output)
+# Specify a date (both entry points accept --date)
 python explore_form4.py --date 2025-04-28
 ```
+
+`--date` defaults to today if omitted.
 
 ## Setup
 
@@ -127,12 +150,13 @@ cp .env.example .env            # fill in your keys
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | For reflector agent | OpenAI key used for post-mortem analysis |
-| `ALPACA_API_KEY` | For risk/reflector agents | Alpaca paper-trading API key |
-| `ALPACA_SECRET_KEY` | For risk/reflector agents | Alpaca paper-trading secret |
-| `EDGAR_USER_AGENT` | Optional | Overrides the hardcoded EDGAR identity string |
+| `EDGAR_USER_AGENT` | Yes | Identity string sent to EDGAR (e.g. `"Your Name email@example.com"`) |
+| `OPENAI_API_KEY` | Yes | GPT-4o scoring in `llm_filter_agent`; GPT-4o-mini post-mortem in `reflector_agent` |
+| `ALPACA_API_KEY` | Yes | Alpaca paper-trading API key |
+| `ALPACA_SECRET_KEY` | Yes | Alpaca paper-trading secret |
 
-The signal scanner (finder + filter) runs without any API keys.
+All four are required for the full pipeline. `finder_agent` and `filter_agent`
+only need `EDGAR_USER_AGENT`.
 
 ## Configuration
 
@@ -144,15 +168,18 @@ Scanner thresholds in `filter_agent.py`:
 | `MIN_STOCK_PRICE` | `2.00` | Minimum average purchase price (penny stock filter) |
 | `MAX_FILING_AGE_DAYS` | `5` | Max days between reporting period and scan date |
 
-Strategy and risk constants in `config.py`:
+LLM filter threshold in `config.py`:
 
 | Constant | Default | Description |
 |---|---|---|
-| `LOOKBACK_DAYS` | `30` | Cluster-buy detection window |
-| `MIN_BUY_DOLLARS` | `50_000` | Minimum purchase size for cluster counting |
-| `CLUSTER_MIN_INSIDERS` | `2` | Insiders within lookback window to qualify as cluster |
+| `MIN_LLM_SCORE` | `4.0` | Minimum composite score (1–10) to pass to risk agent |
+
+Risk constants in `config.py`:
+
+| Constant | Default | Description |
+|---|---|---|
 | `RISK_PER_TRADE` | `0.01` | Fraction of equity risked per trade (1%) |
-| `MAX_DRAWDOWN` | `0.10` | Drawdown limit before trading halts (10%) |
+| `MAX_DRAWDOWN` | `0.10` | Drawdown limit from equity peak before trading halts (10%) |
 | `STOP_PCT` | `0.12` | Stop distance from entry for multi-week holds (12%) |
 
 ## Output Files
@@ -161,11 +188,13 @@ Strategy and risk constants in `config.py`:
 |---|---|
 | `trade_log.json` | One entry per trade with entry reasoning and exit fills |
 | `daily_summaries.json` | Nightly LLM post-mortems and win/loss stats |
+| `hwm.json` | Persistent equity high-water mark for drawdown tracking |
 
 ## Tech Stack
 
 - Python 3.14
 - edgartools — SEC EDGAR Form 4 parsing
-- openai — qualitative post-mortem analysis (reflector agent)
-- alpaca-py — paper-trading execution (risk + reflector agents)
+- openai — LLM scoring (GPT-4o) and post-mortem analysis (GPT-4o-mini)
+- yfinance — price context for LLM scoring
+- alpaca-py — paper-trading execution
 - pandas, python-dotenv

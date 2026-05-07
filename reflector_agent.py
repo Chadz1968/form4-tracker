@@ -22,7 +22,7 @@ Output files:
 
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
@@ -30,8 +30,11 @@ from openai import OpenAI
 
 from config import get_trading_client, OPENAI_KEY
 
-TRADE_LOG   = "trade_log.json"
-SUMMARY_LOG = "daily_summaries.json"
+_DIR        = os.path.dirname(os.path.abspath(__file__))
+TRADE_LOG   = os.path.join(_DIR, "trade_log.json")
+SUMMARY_LOG = os.path.join(_DIR, "daily_summaries.json")
+
+_client = OpenAI(api_key=OPENAI_KEY)
 
 
 # ── File helpers ──────────────────────────────────────────────
@@ -69,7 +72,7 @@ def log_trade(trade: dict, order: dict) -> None:
     entry = {
         # ── Identity ──────────────────────────────────────────
         "date":             str(date.today()),
-        "timestamp":        datetime.utcnow().isoformat(),
+        "timestamp":        datetime.now(timezone.utc).isoformat(),
         "ticker":           trade["ticker"],
         "company":          trade.get("company", ""),
 
@@ -211,14 +214,28 @@ def close_day() -> dict:
     open_trades = [t for t in log if t["outcome"] == "open"]
     exits       = _fetch_exit_fills(client, open_trades)
 
-    for entry in open_trades:
+    # Apply all exits to the in-memory log, then save once
+    today = str(date.today())
+    for entry in log:
         pid = entry.get("order_id")
-        if pid and pid in exits:
+        if pid and pid in exits and entry["outcome"] == "open":
             exit_price, exit_reason = exits[pid]
-            update_exit(pid, exit_price, exit_reason)
+            entry_date  = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            holding     = (date.today() - entry_date).days
+            pnl         = round((exit_price - entry["entry_price"]) * entry["shares"], 2)
+            pnl_pct     = round((exit_price - entry["entry_price"]) / entry["entry_price"] * 100, 2)
+            entry.update({
+                "exit_price":   exit_price,
+                "exit_reason":  exit_reason,
+                "holding_days": holding,
+                "pnl":          pnl,
+                "pnl_pct":      pnl_pct,
+                "outcome":      "win" if pnl > 0 else "loss",
+            })
+    _save_json(TRADE_LOG, log)
 
-    trades_today = _collect_todays_trades()
-    all_open     = [t for t in _load_json(TRADE_LOG) if t["outcome"] == "open"]
+    trades_today = [t for t in log if t.get("date") == today]
+    all_open     = [t for t in log if t["outcome"] == "open"]
 
     summary                = _build_summary(trades_today, all_open)
     summary["insights"]    = _run_postmortem(trades_today, all_open)
@@ -234,11 +251,6 @@ def close_day() -> dict:
     if summary["insights"]:
         print(f"[Reflector] Insights: {summary['insights'][:120]}...")
     return summary
-
-
-def _collect_todays_trades() -> list[dict]:
-    today = str(date.today())
-    return [t for t in _load_json(TRADE_LOG) if t.get("date") == today]
 
 
 def _build_summary(trades_today: list[dict], all_open: list[dict]) -> dict:
@@ -307,8 +319,7 @@ In 3-5 bullet points answer:
 
 Be direct. Reference specific tickers and scores. This goes to a portfolio manager."""
 
-    client   = OpenAI(api_key=OPENAI_KEY)
-    response = client.chat.completions.create(
+    response = _client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=400,

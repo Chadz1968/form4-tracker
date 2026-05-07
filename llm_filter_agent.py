@@ -277,7 +277,7 @@ def score_candidates(ticker_purchases: dict) -> list[dict]:
             collapsed.append(entries[0])
         else:
             # Lead = highest individual llm_score (best role + conviction)
-            lead = max(entries, key=lambda x: (x["role_score"], x["conviction_score"]))
+            lead = max(entries, key=lambda x: (x["role_score"], x["conviction_score"] or 0))
             collapsed.append({
                 **lead,
                 "value":           sum(e["value"] for e in entries),
