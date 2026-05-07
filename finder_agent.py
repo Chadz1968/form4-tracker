@@ -15,7 +15,7 @@ Yields dicts with keys:
     p_trades   – DataFrame of Code=="P" rows from market_trades
 """
 
-import concurrent.futures
+import threading
 import time
 
 from edgar import set_identity, get_filings
@@ -27,9 +27,35 @@ set_identity(EDGAR_USER_AGENT)
 _FILING_TIMEOUT = 30  # seconds before a single filing.obj() call is abandoned
 
 
-def _parse_filing(filing):
-    """Wraps filing.obj() so it can be run in a thread with a timeout."""
-    return filing.obj()
+def _fetch_filing_obj(filing, timeout):
+    """
+    Calls filing.obj() on a daemon thread and returns (form4, elapsed) or
+    (None, elapsed) on timeout.  Daemon threads are not joined, so a stalled
+    EDGAR network call is abandoned immediately rather than blocking the caller.
+    """
+    result = [None]
+    exc    = [None]
+    done   = threading.Event()
+
+    def _run():
+        try:
+            result[0] = filing.obj()
+        except Exception as e:
+            exc[0] = e
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t0 = time.monotonic()
+    completed = done.wait(timeout=timeout)
+    elapsed = time.monotonic() - t0
+
+    if not completed:
+        return None, elapsed
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0], elapsed
 
 
 def fetch_raw_trades(scan_date: str):
@@ -68,17 +94,10 @@ def fetch_raw_trades(scan_date: str):
                 elapsed = time.monotonic() - loop_start
                 print(f"[Finder] Checked {checked} filings, {found} with P-trades so far... ({elapsed:.0f}s)")
 
-            filing_start = time.monotonic()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_parse_filing, filing)
-                try:
-                    form4 = future.result(timeout=_FILING_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    elapsed = time.monotonic() - filing_start
-                    print(f"[Finder] Timeout ({elapsed:.0f}s) on filing {accession} — skipping")
-                    continue
-
-            filing_elapsed = time.monotonic() - filing_start
+            form4, filing_elapsed = _fetch_filing_obj(filing, timeout=_FILING_TIMEOUT)
+            if form4 is None:
+                print(f"[Finder] Timeout ({filing_elapsed:.0f}s) on filing {accession} — skipping")
+                continue
             if filing_elapsed > 10:
                 print(f"[Finder] Slow filing {accession} took {filing_elapsed:.1f}s")
 
