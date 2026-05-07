@@ -15,11 +15,21 @@ Yields dicts with keys:
     p_trades   – DataFrame of Code=="P" rows from market_trades
 """
 
+import concurrent.futures
+import time
+
 from edgar import set_identity, get_filings
 
 from config import EDGAR_USER_AGENT
 
 set_identity(EDGAR_USER_AGENT)
+
+_FILING_TIMEOUT = 30  # seconds before a single filing.obj() call is abandoned
+
+
+def _parse_filing(filing):
+    """Wraps filing.obj() so it can be run in a thread with a timeout."""
+    return filing.obj()
 
 
 def fetch_raw_trades(scan_date: str):
@@ -41,22 +51,36 @@ def fetch_raw_trades(scan_date: str):
     )
     print(f"[Finder] Index loaded — scanning filings...")
 
-    seen    = set()
-    checked = 0
-    found   = 0
+    seen       = set()
+    checked    = 0
+    found      = 0
+    loop_start = time.monotonic()
 
     for filing in filings:
+        accession = getattr(filing, "accession_no", None)
         try:
-            accession = getattr(filing, "accession_no", None)
             if accession in seen:
                 continue
             seen.add(accession)
             checked += 1
 
             if checked % 50 == 0:
-                print(f"[Finder] Checked {checked} filings, {found} with P-trades so far...")
+                elapsed = time.monotonic() - loop_start
+                print(f"[Finder] Checked {checked} filings, {found} with P-trades so far... ({elapsed:.0f}s)")
 
-            form4 = filing.obj()
+            filing_start = time.monotonic()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_parse_filing, filing)
+                try:
+                    form4 = future.result(timeout=_FILING_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    elapsed = time.monotonic() - filing_start
+                    print(f"[Finder] Timeout ({elapsed:.0f}s) on filing {accession} — skipping")
+                    continue
+
+            filing_elapsed = time.monotonic() - filing_start
+            if filing_elapsed > 10:
+                print(f"[Finder] Slow filing {accession} took {filing_elapsed:.1f}s")
 
             market_trades = getattr(form4, "market_trades", None)
             if market_trades is None or len(market_trades) == 0:
@@ -85,4 +109,5 @@ def fetch_raw_trades(scan_date: str):
             print(f"[Finder] Skipped filing (accession={accession}): {type(e).__name__}: {e}")
             continue
 
-    print(f"[Finder] Done — checked {checked} filings, {found} had P-trades.")
+    total_elapsed = time.monotonic() - loop_start
+    print(f"[Finder] Done — checked {checked} filings, {found} had P-trades. ({total_elapsed:.0f}s total)")
