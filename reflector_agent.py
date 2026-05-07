@@ -1,9 +1,23 @@
 """
-Reflector Agent: Logs every trade with the agent's reasoning at entry,
-then runs an end-of-day LLM post-mortem to extract lessons for tomorrow.
+reflector_agent.py
 
-Trade log is stored in trade_log.json (one entry per trade).
-Daily summaries are appended to daily_summaries.json.
+Two responsibilities:
+
+  log_trade(trade, order)  — called immediately after place_order().
+      Persists one record to trade_log.json capturing the full insider signal
+      context at entry: insider name, role, cluster size, all LLM dimension
+      scores, reasoning, and Alpaca order details.
+
+  close_day()  — called once per day (e.g. 30 min before close).
+      Reconciles any exits that filled (stop hit or target hit) against Alpaca,
+      updates P&L, then runs an LLM post-mortem that asks which signal
+      characteristics predicted outcomes — feeding back into filter refinement.
+      Insider positions are multi-week holds, so most trades will still be open
+      when close_day() runs; it only updates the ones that actually closed.
+
+Output files:
+  trade_log.json       — one entry per trade, updated in place on exit
+  daily_summaries.json — appended each time close_day() runs
 """
 
 import json
@@ -16,9 +30,11 @@ from openai import OpenAI
 
 from config import get_trading_client, OPENAI_KEY
 
-TRADE_LOG = "trade_log.json"
+TRADE_LOG   = "trade_log.json"
 SUMMARY_LOG = "daily_summaries.json"
 
+
+# ── File helpers ──────────────────────────────────────────────
 
 def _load_json(path: str) -> list:
     if os.path.exists(path):
@@ -32,69 +48,113 @@ def _save_json(path: str, data: list) -> None:
         json.dump(data, f, indent=2, default=str)
 
 
+# ── Entry logging ─────────────────────────────────────────────
+
 def log_trade(trade: dict, order: dict) -> None:
     """
-    Persist a trade entry combining the risk agent's trade dict and
-    the Alpaca order confirmation. Called immediately after order submission.
-    order must contain 'id' (parent bracket order ID) and 'target_price'.
+    Persist a trade entry at the moment of order submission.
+
+    Args:
+        trade: approved trade dict from risk_agent.evaluate() — contains all
+               signal fields plus entry_price, stop_price, target_price, shares
+        order: return value of risk_agent.place_order() — contains 'id' and
+               'target_price'
     """
+    cluster_members = trade.get("cluster_members") or []
+    member_summary  = [
+        f"{m['insider']} ({m['position']}): ${m['value']:,.0f}"
+        for m in cluster_members
+    ] if cluster_members else []
+
     entry = {
-        "date": str(date.today()),
-        "timestamp": datetime.utcnow().isoformat(),
-        "symbol": trade["symbol"],
-        "side": trade["side"],
-        "shares": trade["shares"],
-        "entry_price": trade["entry_price"],
-        "stop_price": trade["stop_price"],
-        "target_price": order.get("target_price"),
-        "gap_pct": trade["gap_pct"],
-        "volume_ratio": trade.get("volume_ratio"),
-        "rsi": trade.get("rsi"),
-        "catalyst": trade.get("catalyst", ""),
-        "dollar_risk": trade["dollar_risk"],
-        "order_id": order.get("id"),   # parent bracket order ID
-        "exit_price": None,
-        "exit_reason": None,
-        "pnl": None,
-        "outcome": "open",
+        # ── Identity ──────────────────────────────────────────
+        "date":             str(date.today()),
+        "timestamp":        datetime.utcnow().isoformat(),
+        "ticker":           trade["ticker"],
+        "company":          trade.get("company", ""),
+
+        # ── Insider signal ────────────────────────────────────
+        "insider":          trade.get("insider", ""),
+        "position":         trade.get("position", ""),
+        "cluster_size":     trade.get("cluster_size", 1),
+        "cluster_members":  member_summary,
+        "insider_value":    trade.get("value"),       # total $ insiders bought
+        "insider_avg_price":trade.get("avg_price"),   # price they paid
+
+        # ── LLM scores ────────────────────────────────────────
+        "llm_score":        trade.get("llm_score"),
+        "role_score":       trade.get("role_score"),
+        "conviction_score": trade.get("conviction_score"),
+        "timing_score":     trade.get("timing_score"),
+        "cluster_score":    trade.get("cluster_score"),
+        "thesis_score":     trade.get("thesis_score"),
+        "reasoning":        trade.get("reasoning", ""),
+        "red_flags":        trade.get("red_flags", []),
+
+        # ── Trade sizing ──────────────────────────────────────
+        "shares":           trade["shares"],
+        "entry_price":      trade["entry_price"],
+        "stop_price":       trade["stop_price"],
+        "target_price":     order.get("target_price"),
+        "dollar_risk":      trade["dollar_risk"],
+        "account_equity":   trade.get("account_equity"),
+        "order_id":         order.get("id"),
+
+        # ── Exit (populated by close_day / update_exit) ───────
+        "exit_price":       None,
+        "exit_reason":      None,
+        "holding_days":     None,
+        "pnl":              None,
+        "pnl_pct":          None,
+        "outcome":          "open",
     }
+
     log = _load_json(TRADE_LOG)
     log.append(entry)
     _save_json(TRADE_LOG, log)
-    print(f"[Reflector] Logged trade: {entry['symbol']} {entry['side']} {entry['shares']} shares")
+    cluster_tag = f" [CLUSTER x{entry['cluster_size']}]" if entry["cluster_size"] > 1 else ""
+    print(f"[Reflector] Logged: {entry['ticker']}{cluster_tag} | "
+          f"{entry['insider']} | score={entry['llm_score']} | "
+          f"{entry['shares']} shares @ ${entry['entry_price']}")
 
+
+# ── Exit reconciliation ───────────────────────────────────────
 
 def update_exit(order_id: str, exit_price: float, exit_reason: str) -> None:
-    """Update a trade record with exit price, reason, and P&L after close."""
+    """Update an open trade record with exit fill details and compute P&L."""
     log = _load_json(TRADE_LOG)
     for entry in log:
         if entry.get("order_id") == order_id and entry["outcome"] == "open":
-            entry["exit_price"] = exit_price
-            entry["exit_reason"] = exit_reason
-            multiplier = 1 if entry["side"] == "buy" else -1
-            entry["pnl"] = round((exit_price - entry["entry_price"]) * entry["shares"] * multiplier, 2)
-            entry["outcome"] = "win" if entry["pnl"] > 0 else "loss"
+            entry_date  = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            holding     = (date.today() - entry_date).days
+            pnl         = round(
+                (exit_price - entry["entry_price"]) * entry["shares"], 2
+            )
+            pnl_pct     = round(
+                (exit_price - entry["entry_price"]) / entry["entry_price"] * 100, 2
+            )
+            entry.update({
+                "exit_price":   exit_price,
+                "exit_reason":  exit_reason,
+                "holding_days": holding,
+                "pnl":          pnl,
+                "pnl_pct":      pnl_pct,
+                "outcome":      "win" if pnl > 0 else "loss",
+            })
             break
     _save_json(TRADE_LOG, log)
 
 
-def _collect_todays_trades() -> list[dict]:
-    today = str(date.today())
-    return [t for t in _load_json(TRADE_LOG) if t.get("date") == today]
-
-
-def _fetch_exit_fills(client: TradingClient, open_trades: list[dict]) -> dict[str, tuple[float, str]]:
+def _fetch_exit_fills(client, open_trades: list[dict]) -> dict[str, tuple[float, str]]:
     """
-    For each open trade, fetch its parent bracket order from Alpaca and look for
-    a filled child leg (stop or take-profit).  Falls back to scanning all filled
-    orders for a same-symbol market order in the opposite direction (flatten case).
+    For each open trade, check its Alpaca bracket order for a filled child leg.
+    Falls back to scanning all filled orders for a same-symbol flatten.
 
-    Returns {parent_order_id: (exit_price, reason)} where reason is one of
-    'stop', 'target', or 'flatten'.
+    Returns {order_id: (exit_price, reason)} where reason is 'stop', 'target',
+    or 'flatten'.
     """
     results: dict[str, tuple[float, str]] = {}
 
-    # Build a symbol → list of all filled orders map for the flatten fallback.
     try:
         all_orders = client.get_orders(
             filter=GetOrdersRequest(status=QueryOrderStatus.ALL, limit=200)
@@ -113,104 +173,144 @@ def _fetch_exit_fills(client: TradingClient, open_trades: list[dict]) -> dict[st
         if not parent_id:
             continue
 
-        # --- Primary: check bracket child legs ---
+        # Primary: check bracket child legs
         try:
             parent = client.get_order_by_id(parent_id)
             for leg in (parent.legs or []):
                 if str(leg.status) == "filled" and leg.filled_avg_price:
-                    order_type = str(leg.order_type).lower()
-                    reason = "stop" if "stop" in order_type else "target"
+                    reason = "stop" if "stop" in str(leg.order_type).lower() else "target"
                     results[parent_id] = (float(leg.filled_avg_price), reason)
                     break
             if parent_id in results:
                 continue
         except Exception as e:
-            print(f"[Reflector] Could not fetch parent order {parent_id}: {e}")
+            print(f"[Reflector] Could not fetch order {parent_id}: {e}")
 
-        # --- Fallback: flatten — look for opposite-side market fill ---
-        opposite_side = "sell" if trade["side"] == "buy" else "buy"
-        for o in fills_by_symbol.get(trade["symbol"], []):
-            if str(o.side).lower() == opposite_side and str(o.order_type).lower() == "market":
+        # Fallback: manual flatten — opposite-side market fill
+        for o in fills_by_symbol.get(trade["ticker"], []):
+            if str(o.side).lower() == "sell" and str(o.order_type).lower() == "market":
                 results[parent_id] = (float(o.filled_avg_price), "flatten")
                 break
 
     return results
 
 
+# ── Daily close ───────────────────────────────────────────────
+
 def close_day() -> dict:
     """
-    Called at end of trading day:
-      1. Reconciles open trade records with Alpaca fill prices
-      2. Runs LLM post-mortem
-      3. Appends summary to daily_summaries.json
-    Returns the summary dict.
+    Reconcile exits, run post-mortem, append to daily_summaries.json.
+
+    Safe to call daily even when most positions are still open — only trades
+    with a filled exit leg are updated. Open multi-week holds are left as-is.
     """
     print("[Reflector] Running end-of-day reconciliation...")
 
-    client = get_trading_client()
-
-    log = _load_json(TRADE_LOG)
+    client      = get_trading_client()
+    log         = _load_json(TRADE_LOG)
     open_trades = [t for t in log if t["outcome"] == "open"]
-    exits = _fetch_exit_fills(client, open_trades)
+    exits       = _fetch_exit_fills(client, open_trades)
 
     for entry in open_trades:
-        parent_id = entry.get("order_id")
-        if parent_id and parent_id in exits:
-            exit_price, exit_reason = exits[parent_id]
-            update_exit(parent_id, exit_price, exit_reason)
+        pid = entry.get("order_id")
+        if pid and pid in exits:
+            exit_price, exit_reason = exits[pid]
+            update_exit(pid, exit_price, exit_reason)
 
     trades_today = _collect_todays_trades()
-    summary = _build_summary(trades_today)
-    summary["insights"] = _run_postmortem(trades_today)
+    all_open     = [t for t in _load_json(TRADE_LOG) if t["outcome"] == "open"]
+
+    summary                = _build_summary(trades_today, all_open)
+    summary["insights"]    = _run_postmortem(trades_today, all_open)
 
     summaries = _load_json(SUMMARY_LOG)
     summaries.append(summary)
     _save_json(SUMMARY_LOG, summaries)
 
-    print(f"[Reflector] Day closed. Trades={summary['total_trades']} | P&L=${summary['total_pnl']}")
-    print(f"[Reflector] Insights: {summary['insights'][:120]}...")
+    print(f"[Reflector] Done. Today={summary['trades_today']} trades | "
+          f"Closed today={summary['closed_today']} | "
+          f"P&L=${summary['total_pnl']} | "
+          f"Open positions={summary['open_positions']}")
+    if summary["insights"]:
+        print(f"[Reflector] Insights: {summary['insights'][:120]}...")
     return summary
 
 
-def _build_summary(trades: list[dict]) -> dict:
-    closed = [t for t in trades if t["outcome"] != "open"]
-    total_pnl = round(sum(t["pnl"] for t in closed if t["pnl"] is not None), 2)
-    wins = sum(1 for t in closed if t["outcome"] == "win")
-    losses = sum(1 for t in closed if t["outcome"] == "loss")
+def _collect_todays_trades() -> list[dict]:
+    today = str(date.today())
+    return [t for t in _load_json(TRADE_LOG) if t.get("date") == today]
+
+
+def _build_summary(trades_today: list[dict], all_open: list[dict]) -> dict:
+    closed  = [t for t in trades_today if t["outcome"] != "open"]
+    wins    = sum(1 for t in closed if t["outcome"] == "win")
+    losses  = sum(1 for t in closed if t["outcome"] == "loss")
+    pnl     = round(sum(t["pnl"] for t in closed if t["pnl"] is not None), 2)
     return {
-        "date": str(date.today()),
-        "total_trades": len(trades),
-        "wins": wins,
-        "losses": losses,
-        "win_rate": round(wins / len(closed), 2) if closed else 0,
-        "total_pnl": total_pnl,
+        "date":            str(date.today()),
+        "trades_today":    len(trades_today),
+        "closed_today":    len(closed),
+        "wins":            wins,
+        "losses":          losses,
+        "win_rate":        round(wins / len(closed), 2) if closed else None,
+        "total_pnl":       pnl,
+        "open_positions":  len(all_open),
     }
 
 
-def _run_postmortem(trades: list[dict]) -> str:
-    """Ask the LLM to analyse today's trades and suggest improvements."""
-    if not trades:
-        return "No trades today — nothing to analyse."
+def _run_postmortem(trades_today: list[dict], all_open: list[dict]) -> str:
+    """
+    Ask the LLM which signal characteristics predicted outcomes and what
+    filter threshold adjustments are worth testing.
+    """
+    closed = [t for t in trades_today if t["outcome"] != "open"]
+    if not closed and not all_open:
+        return "No trades on record — nothing to analyse."
 
-    trade_lines = "\n".join(
-        f"- {t['symbol']} {t['side'].upper()} gap={t['gap_pct']*100:+.1f}% "
-        f"RSI={t.get('rsi','?')} vol_ratio={t.get('volume_ratio','?')} "
-        f"outcome={t['outcome']} pnl=${t.get('pnl','?')} "
-        f"catalyst: {t.get('catalyst','')[:60]}"
-        for t in trades
-    )
+    def fmt(t: dict) -> str:
+        outcome = t["outcome"]
+        pnl_str = f"pnl=${t['pnl']:+.0f} ({t.get('pnl_pct', '?'):+.1f}%)" if t["pnl"] is not None else "still open"
+        return (
+            f"- {t['ticker']} | {t['insider']} ({t['position']}) | "
+            f"cluster={t['cluster_size']} | score={t['llm_score']} | "
+            f"role={t['role_score']} conviction={t['conviction_score']} "
+            f"timing={t['timing_score']} thesis={t['thesis_score']} | "
+            f"held {t.get('holding_days', '?')} days | exit={t.get('exit_reason','?')} | "
+            f"{pnl_str}"
+        )
 
-    prompt = (
-        "You are a trading coach reviewing today's gap-and-momentum trades.\n\n"
-        f"Today's trades:\n{trade_lines}\n\n"
-        "In 3-5 bullet points: what worked, what didn't, and one specific rule "
-        "to add or adjust for tomorrow's session."
-    )
+    closed_block = "\n".join(fmt(t) for t in closed) if closed else "None closed today."
+    open_block   = "\n".join(
+        f"- {t['ticker']} | score={t['llm_score']} | "
+        f"entry=${t['entry_price']} stop=${t['stop_price']} target=${t['target_price']} | "
+        f"held {(date.today() - datetime.strptime(t['date'], '%Y-%m-%d').date()).days} days"
+        for t in all_open
+    ) if all_open else "None."
 
-    client = OpenAI(api_key=OPENAI_KEY)
+    prompt = f"""You are an insider-signal trading analyst reviewing performance data.
+Your job is to identify which signal characteristics predicted trade outcomes and
+suggest specific, testable adjustments to the scoring thresholds.
+
+TRADES CLOSED TODAY:
+{closed_block}
+
+OPEN POSITIONS (multi-week holds, not yet closed):
+{open_block}
+
+In 3-5 bullet points answer:
+1. Which scoring dimensions (role, conviction, timing, cluster, thesis) best separated
+   winners from losers in closed trades?
+2. Is the MIN_LLM_SCORE threshold (currently 4.0/10) set correctly, or should it move?
+3. Any pattern in exit reason (stop vs target) that suggests the stop/target distances
+   need adjustment?
+4. One specific, testable rule change for tomorrow's filter.
+
+Be direct. Reference specific tickers and scores. This goes to a portfolio manager."""
+
+    client   = OpenAI(api_key=OPENAI_KEY)
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=400,
     )
     return response.choices[0].message.content.strip()

@@ -121,6 +121,20 @@ def filter_trades(raw_trades, scan_date: str):
         }
 
 
+def get_candidates(scan_date: str) -> dict[str, list[dict]]:
+    """
+    Run the full finder → filter pipeline and return purchases bucketed by
+    ticker. Each value is a list of purchase dicts; length >= 2 means a
+    cluster buy. This is the handoff point for llm_filter_agent.
+    """
+    raw_trades = fetch_raw_trades(scan_date)
+    qualifying = filter_trades(raw_trades, scan_date)
+    ticker_purchases: dict[str, list[dict]] = {}
+    for purchase in qualifying:
+        ticker_purchases.setdefault(purchase["ticker"], []).append(purchase)
+    return ticker_purchases
+
+
 def run(scan_date: str) -> None:
     print("=" * 60)
     print(f"Fetching Form 4 filings for {scan_date}...")
@@ -128,14 +142,7 @@ def run(scan_date: str) -> None:
     print(f"Scanning for open-market purchases over "
           f"${MIN_PURCHASE_VALUE:,}...\n")
 
-    raw_trades = fetch_raw_trades(scan_date)
-    qualifying = filter_trades(raw_trades, scan_date)
-
-    # Bucket by ticker for cluster detection
-    ticker_purchases: dict[str, list[dict]] = {}
-    for purchase in qualifying:
-        ticker_purchases.setdefault(purchase["ticker"], []).append(purchase)
-
+    ticker_purchases = get_candidates(scan_date)
     clusters    = [(t, ps) for t, ps in ticker_purchases.items() if len(ps) >= 2]
     single_buys = [(t, ps[0]) for t, ps in ticker_purchases.items() if len(ps) == 1]
 

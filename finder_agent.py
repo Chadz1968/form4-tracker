@@ -30,14 +30,18 @@ def fetch_raw_trades(scan_date: str):
     month   = int(scan_date[5:7])
     quarter = (month - 1) // 3 + 1
 
+    print(f"[Finder] Downloading filing index for {scan_date}...")
     filings = get_filings(
         year=year,
         quarter=quarter,
         form="4",
         filing_date=scan_date,
     )
+    print(f"[Finder] Index loaded — scanning filings...")
 
-    seen = set()
+    seen    = set()
+    checked = 0
+    found   = 0
 
     for filing in filings:
         try:
@@ -45,6 +49,10 @@ def fetch_raw_trades(scan_date: str):
             if accession in seen:
                 continue
             seen.add(accession)
+            checked += 1
+
+            if checked % 50 == 0:
+                print(f"[Finder] Checked {checked} filings, {found} with P-trades so far...")
 
             form4 = filing.obj()
 
@@ -60,6 +68,7 @@ def fetch_raw_trades(scan_date: str):
             company_name = getattr(issuer, "name",   "?") if issuer else "?"
             ticker       = getattr(issuer, "ticker", "?") if issuer else "?"
 
+            found += 1
             yield {
                 "accession": accession,
                 "ticker":    ticker,
@@ -72,3 +81,5 @@ def fetch_raw_trades(scan_date: str):
 
         except Exception:
             continue
+
+    print(f"[Finder] Done — checked {checked} filings, {found} had P-trades.")
