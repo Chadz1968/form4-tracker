@@ -8,6 +8,9 @@
 trade_log.json
 trade_log.csv
 daily_summaries.json
+hwm.json
+backtest_signals.json
+backtest_results.csv
 *.log
 
 # Python
