@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Claude Code internal
+.claude/
+
 # Runtime output
 trade_log.json
 trade_log.csv
