@@ -15,11 +15,47 @@ Yields dicts with keys:
     p_trades   – DataFrame of Code=="P" rows from market_trades
 """
 
+import threading
+import time
+
 from edgar import set_identity, get_filings
 
 from config import EDGAR_USER_AGENT
 
 set_identity(EDGAR_USER_AGENT)
+
+_FILING_TIMEOUT = 30  # seconds before a single filing.obj() call is abandoned
+
+
+def _fetch_filing_obj(filing, timeout):
+    """
+    Calls filing.obj() on a daemon thread and returns (form4, elapsed) or
+    (None, elapsed) on timeout.  Daemon threads are not joined, so a stalled
+    EDGAR network call is abandoned immediately rather than blocking the caller.
+    """
+    result = [None]
+    exc    = [None]
+    done   = threading.Event()
+
+    def _run():
+        try:
+            result[0] = filing.obj()
+        except Exception as e:
+            exc[0] = e
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t0 = time.monotonic()
+    completed = done.wait(timeout=timeout)
+    elapsed = time.monotonic() - t0
+
+    if not completed:
+        return None, elapsed
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0], elapsed
 
 
 def fetch_raw_trades(scan_date: str):
@@ -41,22 +77,29 @@ def fetch_raw_trades(scan_date: str):
     )
     print(f"[Finder] Index loaded — scanning filings...")
 
-    seen    = set()
-    checked = 0
-    found   = 0
+    seen       = set()
+    checked    = 0
+    found      = 0
+    loop_start = time.monotonic()
 
     for filing in filings:
+        accession = getattr(filing, "accession_no", None)
         try:
-            accession = getattr(filing, "accession_no", None)
             if accession in seen:
                 continue
             seen.add(accession)
             checked += 1
 
             if checked % 50 == 0:
-                print(f"[Finder] Checked {checked} filings, {found} with P-trades so far...")
+                elapsed = time.monotonic() - loop_start
+                print(f"[Finder] Checked {checked} filings, {found} with P-trades so far... ({elapsed:.0f}s)")
 
-            form4 = filing.obj()
+            form4, filing_elapsed = _fetch_filing_obj(filing, timeout=_FILING_TIMEOUT)
+            if form4 is None:
+                print(f"[Finder] Timeout ({filing_elapsed:.0f}s) on filing {accession} — skipping")
+                continue
+            if filing_elapsed > 10:
+                print(f"[Finder] Slow filing {accession} took {filing_elapsed:.1f}s")
 
             market_trades = getattr(form4, "market_trades", None)
             if market_trades is None or len(market_trades) == 0:
@@ -85,4 +128,5 @@ def fetch_raw_trades(scan_date: str):
             print(f"[Finder] Skipped filing (accession={accession}): {type(e).__name__}: {e}")
             continue
 
-    print(f"[Finder] Done — checked {checked} filings, {found} had P-trades.")
+    total_elapsed = time.monotonic() - loop_start
+    print(f"[Finder] Done — checked {checked} filings, {found} had P-trades. ({total_elapsed:.0f}s total)")
