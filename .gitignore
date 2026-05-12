@@ -1,5 +1,6 @@
 # Secrets
 .env
+certs/
 
 # Claude Code internal
 .claude/

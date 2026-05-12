@@ -6,7 +6,7 @@ Start all day trading manager servers with a single command.
   python start_servers.py
 
 Starts:
-  Trade Manager UI      http://127.0.0.1:8787
+  Trade Manager UI      https://127.0.0.1:8787  (http if no cert)
   TradingView Webhook   http://127.0.0.1:8765
   Market Scanner        (scans at market open, idles outside hours)
   ngrok tunnel          exposes webhook port to TradingView
@@ -30,6 +30,12 @@ from pathlib import Path
 _DIR = Path(__file__).parent
 PYTHON = sys.executable
 
+_CERT = _DIR / "certs" / "trade_manager_ui.crt"
+_KEY  = _DIR / "certs" / "trade_manager_ui.key"
+_TLS  = _CERT.exists() and _KEY.exists()
+_UI_SCHEME = "https" if _TLS else "http"
+_UI_URL = f"{_UI_SCHEME}://127.0.0.1:8787"
+
 _NGROK_SEARCH = [
     shutil.which("ngrok"),
     str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/WinGet/Packages"
@@ -52,7 +58,11 @@ def _ngrok_search() -> list[str | None]:
 
 def _health(url: str, timeout: int = 3) -> bool:
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        import ssl as _ssl
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        with urllib.request.urlopen(url, timeout=timeout, context=ctx) as r:
             return r.status == 200
     except Exception:
         return False
@@ -111,15 +121,16 @@ def main() -> None:
 
     # --- Trade Manager UI ---
     if _port_in_use(8787):
-        print("  UI server      already running on :8787")
+        print(f"  UI server      already running on :8787")
     else:
-        print("  Starting UI server on :8787 ...", end=" ", flush=True)
+        scheme_label = "https" if _TLS else "http (no cert found)"
+        print(f"  Starting UI server on :8787 [{scheme_label}] ...", end=" ", flush=True)
         p = subprocess.Popen(
             [PYTHON, "-u", "trade_manager_ui.py", "--host", "127.0.0.1", "--port", "8787"],
             cwd=_DIR,
         )
         processes.append(p)
-        ok = _wait_healthy("UI", "http://127.0.0.1:8787/health")
+        ok = _wait_healthy("UI", f"{_UI_URL}/health", retries=12)
         print("OK" if ok else "WARN — check logs")
 
     # --- TradingView Webhook ---
@@ -171,14 +182,14 @@ def main() -> None:
     print("=" * 56)
     print("  READY")
     print("=" * 56)
-    print(f"  Coach UI      http://127.0.0.1:8787")
+    print(f"  Coach UI      {_UI_URL}")
     if webhook_url:
         print(f"  Webhook URL   {webhook_url}/webhook/tradingview")
     print()
     print("  Ctrl+C to stop all servers")
     print("=" * 56)
 
-    webbrowser.open("http://127.0.0.1:8787")
+    webbrowser.open(_UI_URL)
 
     # Keep alive — child processes run independently
     try:

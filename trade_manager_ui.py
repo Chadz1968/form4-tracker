@@ -953,9 +953,29 @@ INDEX_HTML = r"""<!doctype html>
 """
 
 
-def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+_DEFAULT_CERT = os.path.join(_DIR, "certs", "trade_manager_ui.crt")
+_DEFAULT_KEY = os.path.join(_DIR, "certs", "trade_manager_ui.key")
+
+
+def run_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    certfile: str | None = None,
+    keyfile: str | None = None,
+) -> None:
+    import ssl
+
     server = ThreadingHTTPServer((host, port), TradeManagerUiHandler)
-    _log(f"[TradeManagerUI] Listening on http://{host}:{port}")
+
+    if certfile and keyfile:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    else:
+        scheme = "http"
+
+    _log(f"[TradeManagerUI] Listening on {scheme}://{host}:{port}")
     server.serve_forever()
 
 
@@ -963,8 +983,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Local trade manager coach UI")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--cert", default=_DEFAULT_CERT, help="TLS certificate file")
+    parser.add_argument("--key", default=_DEFAULT_KEY, help="TLS private key file")
+    parser.add_argument("--no-tls", action="store_true", help="Disable TLS even if cert exists")
     args = parser.parse_args()
-    run_server(args.host, args.port)
+
+    certfile = None
+    keyfile = None
+    if not args.no_tls and os.path.exists(args.cert) and os.path.exists(args.key):
+        certfile = args.cert
+        keyfile = args.key
+    elif not args.no_tls and (args.cert != _DEFAULT_CERT or args.key != _DEFAULT_KEY):
+        raise SystemExit(f"Cert or key not found: {args.cert}, {args.key}")
+
+    run_server(args.host, args.port, certfile, keyfile)
 
 
 if __name__ == "__main__":
