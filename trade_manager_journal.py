@@ -86,6 +86,7 @@ def ingest_signal(payload: dict) -> dict:
         "price": float(payload["price"]),
         "trigger": payload.get("trigger"),
         "notes": payload.get("notes", ""),
+        "levels": payload.get("levels") or {},
         "raw_payload": payload,
     }
 

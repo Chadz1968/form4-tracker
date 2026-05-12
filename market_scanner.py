@@ -161,16 +161,18 @@ class MarketScanner:
         if not or_complete or len(or_bars) < 2:
             return
         or_high = max(b.high for b in or_bars)
-        # previous bar was at or below OR high; current bar closes above it
+        or_low  = min(b.low  for b in or_bars)
         if prev.close <= or_high < cur.close:
             self._emit(symbol, "opening_range_breakout", "breaks_opening_range",
                        cur, current_vwap, rvol,
-                       f"Broke above OR high {or_high:.2f}")
+                       f"Broke above OR high {or_high:.2f}",
+                       levels={"vwap": current_vwap, "or_high": or_high, "or_low": or_low})
 
     def _check_vwap_reclaim(self, symbol, cur, prev, current_vwap, rvol):
         if prev.close < current_vwap and cur.close > current_vwap and cur.close > prev.close:
             self._emit(symbol, "vwap_reclaim", "close_above_vwap",
-                       cur, current_vwap, rvol, "Reclaimed VWAP on up-close")
+                       cur, current_vwap, rvol, "Reclaimed VWAP on up-close",
+                       levels={"vwap": current_vwap})
 
     def _check_vwap_pullback(self, symbol, bars, cur, prev, current_vwap, rvol):
         if len(bars) < 10:
@@ -180,7 +182,8 @@ class MarketScanner:
         holding = cur.close > current_vwap and cur.close > prev.close
         if trend_up and near_vwap and holding:
             self._emit(symbol, "vwap_pullback", "vwap_hold",
-                       cur, current_vwap, rvol, "Pulled back to VWAP, holding above")
+                       cur, current_vwap, rvol, "Pulled back to VWAP, holding above",
+                       levels={"vwap": current_vwap})
 
     def _check_news_momentum(self, symbol, bars, cur, current_vwap, rvol):
         if rvol is None or rvol < self._min_rvol:
@@ -191,7 +194,8 @@ class MarketScanner:
         if strong_trend:
             self._emit(symbol, "news_momentum", "trend_confirmation",
                        cur, current_vwap, rvol,
-                       f"High RVOL ({rvol:.1f}x) with uptrend above VWAP — confirm catalyst manually")
+                       f"High RVOL ({rvol:.1f}x) with uptrend above VWAP — confirm catalyst manually",
+                       levels={"vwap": current_vwap})
 
     def _check_failed_breakdown(self, symbol, bars, cur, prev, current_vwap, rvol):
         if len(bars) < 7:
@@ -203,14 +207,16 @@ class MarketScanner:
         if broke_below and reclaimed:
             self._emit(symbol, "failed_breakdown_reversal", "reclaim_confirmation",
                        cur, current_vwap, rvol,
-                       f"Broke below {support:.2f} then reclaimed on volume")
+                       f"Broke below {support:.2f} then reclaimed on volume",
+                       levels={"vwap": current_vwap, "support": support})
 
     # ------------------------------------------------------------------
     # Signal emission with per-day dedup
     # ------------------------------------------------------------------
 
     def _emit(self, symbol: str, setup: str, trigger: str, bar,
-              current_vwap: float, rvol: float | None, detail: str) -> None:
+              current_vwap: float, rvol: float | None, detail: str,
+              levels: dict | None = None) -> None:
         key = (symbol, setup)
         today = date.today()
         if self._signaled.get(key) == today:
@@ -230,6 +236,7 @@ class MarketScanner:
             "trigger": trigger,
             "notes": notes,
             "bar_time": bar.timestamp.isoformat(),
+            "levels": {k: round(float(v), 2) for k, v in (levels or {}).items()},
         })
         log.info("SIGNAL  %-6s  %-30s  $%.2f  %s  [id=%s]",
                  symbol, setup, bar.close, rvol_str, signal["id"][:8])

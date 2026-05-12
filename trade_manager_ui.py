@@ -98,6 +98,32 @@ def build_plan_from_payload(payload: dict) -> dict:
     )
 
 
+def suggest_levels(payload: dict) -> dict:
+    signal = _find_signal(payload.get("signal_id", ""))
+    entry = float(signal.get("price") or 0)
+    setup = signal.get("setup", "")
+    levels = signal.get("levels") or {}
+    vwap = levels.get("vwap")
+    _BUFFER = 0.003  # 0.3% below key level for stop
+
+    stop = None
+    if setup in ("vwap_reclaim", "vwap_pullback") and vwap:
+        stop = round(vwap * (1 - _BUFFER), 2)
+    elif setup == "opening_range_breakout" and levels.get("or_high"):
+        stop = round(levels["or_high"] * (1 - _BUFFER), 2)
+    elif setup == "failed_breakdown_reversal" and levels.get("support"):
+        stop = round(levels["support"] * (1 - _BUFFER), 2)
+    elif setup == "news_momentum" and vwap:
+        stop = round(vwap * (1 - _BUFFER), 2)
+
+    target = None
+    if stop and entry and entry > stop:
+        risk = entry - stop
+        target = round(entry + 2 * risk, 2)
+
+    return {"stop": stop, "target": target, "entry": entry, "levels": levels}
+
+
 def coach_check(payload: dict) -> dict:
     plan = build_plan_from_payload(payload)
     decision = journal.evaluate_trade_plan(plan)
@@ -158,6 +184,8 @@ def handle_api(method: str, path: str, payload: dict | None = None) -> tuple[int
     try:
         if method == "GET" and path == "/api/state":
             return 200, {"ok": True, **load_ui_state()}
+        if method == "POST" and path == "/api/suggest-levels":
+            return 200, {"ok": True, **suggest_levels(payload)}
         if method == "POST" and path == "/api/coach-check":
             return 200, {"ok": True, **coach_check(payload)}
         if method == "POST" and path == "/api/save-plan":
@@ -662,7 +690,7 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    function selectSignal(signal) {
+    async function selectSignal(signal) {
       state.selected = signal;
       state.lastDecision = null;
       el("selectedBadge").textContent = signal.status || "new";
@@ -677,9 +705,25 @@ INDEX_HTML = r"""<!doctype html>
       el("accountEquity").value = state.accountEquity || "";
       el("notes").value = signal.notes || "";
       el("decisionBadge").textContent = "Waiting";
-      el("decisionBox").innerHTML = `<div class="muted">Enter stop and target, then run Coach Check.</div>`;
+      el("decisionBox").innerHTML = `<div class="muted">Suggesting stop &amp; target…</div>`;
       updateRewardRisk();
       renderSignals();
+
+      try {
+        const s = await api("/api/suggest-levels", {
+          method: "POST",
+          body: JSON.stringify({ signal_id: signal.id })
+        });
+        if (s.stop)   el("stopPrice").value   = s.stop;
+        if (s.target) el("targetPrice").value = s.target;
+        const hasLevels = s.stop && s.target;
+        el("decisionBox").innerHTML = hasLevels
+          ? `<div class="muted">Stop &amp; target auto-filled from signal levels. Adjust if needed, then run Coach Check.</div>`
+          : `<div class="muted">No level data on this signal — enter stop and target manually, then run Coach Check.</div>`;
+        updateRewardRisk();
+      } catch (_) {
+        el("decisionBox").innerHTML = `<div class="muted">Enter stop and target, then run Coach Check.</div>`;
+      }
     }
 
     function planPayload() {
