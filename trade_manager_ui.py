@@ -115,6 +115,12 @@ def update_signal(payload: dict) -> dict:
     return {"ok": True, "signal_id": signal_id, "status": status}
 
 
+def get_daily_review(payload: dict) -> dict:
+    day = payload.get("date") or str(__import__("datetime").date.today())
+    review = journal.build_daily_review(day)
+    return {"review": review}
+
+
 def add_signal(payload: dict) -> dict:
     symbol = str(payload.get("symbol") or "").upper().strip()
     price = payload.get("price")
@@ -155,6 +161,8 @@ def handle_api(method: str, path: str, payload: dict | None = None) -> tuple[int
             return 201, {"ok": True, **submit_order(payload)}
         if method == "POST" and path == "/api/add-signal":
             return 201, {"ok": True, **add_signal(payload)}
+        if method == "POST" and path == "/api/daily-review":
+            return 200, {"ok": True, **get_daily_review(payload)}
         if method == "POST" and path == "/api/signal-status":
             return 200, update_signal(payload)
     except (KeyError, TypeError, ValueError) as exc:
@@ -584,6 +592,16 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="panel-body" id="journalTable"></div>
       </section>
+
+      <section class="panel journal">
+        <div class="panel-head">
+          <h2>Daily Review</h2>
+          <button id="reviewBtn">Build Review</button>
+        </div>
+        <div class="panel-body" id="reviewBox">
+          <div class="muted" style="padding:8px 0">Click Build Review to generate today's coaching summary.</div>
+        </div>
+      </section>
     </section>
   </main>
 
@@ -840,6 +858,54 @@ INDEX_HTML = r"""<!doctype html>
     el("submitBtn").addEventListener("click", submitOrder);
     el("saveBtn").addEventListener("click", savePlan);
     el("expireBtn").addEventListener("click", expireSignal);
+
+    el("reviewBtn").addEventListener("click", async () => {
+      el("reviewBtn").textContent = "Building…";
+      el("reviewBtn").disabled = true;
+      try {
+        const data = await api("/api/daily-review", { method: "POST", body: "{}" });
+        renderReview(data.review || {});
+      } catch (err) {
+        el("reviewBox").innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
+      } finally {
+        el("reviewBtn").textContent = "Build Review";
+        el("reviewBtn").disabled = false;
+      }
+    });
+
+    function renderReview(r) {
+      const na = v => (v === null || v === undefined) ? "n/a" : v;
+      const pct = v => (v === null || v === undefined) ? "n/a" : `${(v * 100).toFixed(0)}%`;
+      const mistakes = Object.entries(r.mistake_counts || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([tag, n]) => `<li>${escapeHtml(tag)} ×${n}</li>`).join("") || "<li>None</li>";
+      el("reviewBox").innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
+          <div class="decision-box" style="min-height:auto;text-align:center">
+            <div class="small muted">Trades</div><div style="font-size:20px;font-weight:700">${na(r.trades)}</div>
+          </div>
+          <div class="decision-box" style="min-height:auto;text-align:center">
+            <div class="small muted">Win Rate</div><div style="font-size:20px;font-weight:700">${pct(r.win_rate)}</div>
+          </div>
+          <div class="decision-box" style="min-height:auto;text-align:center">
+            <div class="small muted">Total R</div><div style="font-size:20px;font-weight:700;color:${(r.total_r||0)>=0?'var(--good)':'var(--danger)'}">${na(r.total_r)}R</div>
+          </div>
+          <div class="decision-box" style="min-height:auto;text-align:center">
+            <div class="small muted">Avg R</div><div style="font-size:20px;font-weight:700">${na(r.average_r)}R</div>
+          </div>
+        </div>
+        <div class="decision-box" style="margin-bottom:8px">
+          <div class="decision-title" style="color:var(--accent)">Coach Focus</div>
+          <div>${escapeHtml(r.coach_focus || "")}</div>
+        </div>
+        ${Object.keys(r.mistake_counts || {}).length ? `
+        <div class="decision-box">
+          <div class="decision-title">Mistake Tags</div>
+          <ul class="small" style="margin:4px 0 0 16px;padding:0">${mistakes}</ul>
+        </div>` : ""}
+        <div class="small muted" style="margin-top:8px">Date: ${escapeHtml(r.date || "")} | ${r.wins ?? 0}W / ${r.losses ?? 0}L</div>
+      `;
+    }
 
     el("addSignalToggle").addEventListener("click", () => {
       const form = el("addSignalForm");
