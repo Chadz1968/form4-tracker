@@ -253,7 +253,7 @@ class MarketScanner:
             feed=DataFeed.IEX,
         )
         result = self._data.get_stock_bars(req)
-        return list(result.get(symbol, []))
+        return list(result[symbol] if symbol in result else [])
 
     def _relative_volume(self, symbol: str, today_bars: list,
                          now_et: datetime) -> float | None:
@@ -285,7 +285,8 @@ class MarketScanner:
                 end=now_et.astimezone(timezone.utc),
                 feed=DataFeed.IEX,
             )
-            daily = list(self._data.get_stock_bars(req).get(symbol, []))
+            barset = self._data.get_stock_bars(req)
+            daily = list(barset[symbol] if symbol in barset else [])
             # exclude today (partial) — use last 20 complete days
             complete = [b for b in daily if b.timestamp.date() < today][-20:]
             if len(complete) < 5:
