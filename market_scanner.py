@@ -239,6 +239,7 @@ class MarketScanner:
     # ------------------------------------------------------------------
 
     def _today_bars(self, symbol: str) -> list:
+        from alpaca.data.enums import DataFeed
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
 
@@ -249,6 +250,7 @@ class MarketScanner:
             timeframe=TimeFrame.Minute,
             start=market_open.astimezone(timezone.utc),
             end=datetime.now(timezone.utc),
+            feed=DataFeed.IEX,
         )
         result = self._data.get_stock_bars(req)
         return list(result.get(symbol, []))
@@ -272,6 +274,7 @@ class MarketScanner:
             return cached[1]
 
         try:
+            from alpaca.data.enums import DataFeed
             from alpaca.data.requests import StockBarsRequest
             from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
@@ -280,6 +283,7 @@ class MarketScanner:
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
                 start=(now_et - timedelta(days=35)).astimezone(timezone.utc),
                 end=now_et.astimezone(timezone.utc),
+                feed=DataFeed.IEX,
             )
             daily = list(self._data.get_stock_bars(req).get(symbol, []))
             # exclude today (partial) — use last 20 complete days
