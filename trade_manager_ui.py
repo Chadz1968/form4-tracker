@@ -115,6 +115,14 @@ def update_signal(payload: dict) -> dict:
     return {"ok": True, "signal_id": signal_id, "status": status}
 
 
+def submit_order(payload: dict) -> dict:
+    import order_executor
+    plan = build_plan_from_payload(payload)
+    decision = journal.evaluate_trade_plan(plan)
+    result = order_executor.execute_approved_plan(plan, decision)
+    return {"plan": plan, "decision": decision, "order": result}
+
+
 def handle_api(method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
     payload = payload or {}
     try:
@@ -124,6 +132,8 @@ def handle_api(method: str, path: str, payload: dict | None = None) -> tuple[int
             return 200, {"ok": True, **coach_check(payload)}
         if method == "POST" and path == "/api/save-plan":
             return 201, {"ok": True, **save_trade_plan(payload)}
+        if method == "POST" and path == "/api/submit-order":
+            return 201, {"ok": True, **submit_order(payload)}
         if method == "POST" and path == "/api/signal-status":
             return 200, update_signal(payload)
     except (KeyError, TypeError, ValueError) as exc:
@@ -484,6 +494,7 @@ INDEX_HTML = r"""<!doctype html>
             </form>
             <div class="actions">
               <button class="primary" id="coachBtn">Coach Check</button>
+              <button id="submitBtn" disabled title="Run Coach Check first — only enabled when plan is approved">Submit Order</button>
               <button id="saveBtn">Save Plan</button>
               <button id="expireBtn">Expire Signal</button>
             </div>
@@ -651,6 +662,7 @@ INDEX_HTML = r"""<!doctype html>
       const approved = decision.approved === true;
       el("decisionBadge").textContent = approved ? "Approved" : "Rejected";
       el("decisionBadge").className = "badge " + (approved ? "good" : "bad");
+      el("submitBtn").disabled = !approved;
       const reasons = (decision.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
       const warnings = (decision.warnings || []).map(w => `<li>${escapeHtml(w)}</li>`).join("");
       el("decisionBox").innerHTML = `
@@ -660,6 +672,32 @@ INDEX_HTML = r"""<!doctype html>
         ${reasons ? `<div class="small"><strong>Reasons</strong><ul>${reasons}</ul></div>` : ""}
         ${warnings ? `<div class="small"><strong>Warnings</strong><ul>${warnings}</ul></div>` : ""}
       `;
+    }
+
+    async function submitOrder() {
+      try {
+        el("submitBtn").disabled = true;
+        el("submitBtn").textContent = "Submitting...";
+        const data = await api("/api/submit-order", {
+          method: "POST",
+          body: JSON.stringify(planPayload())
+        });
+        const order = data.order || {};
+        el("decisionBadge").textContent = "Order Sent";
+        el("decisionBadge").className = "badge good";
+        el("decisionBox").innerHTML = `
+          <div class="decision-title approved">Order submitted to Alpaca</div>
+          <div>Symbol: <strong>${escapeHtml(order.symbol || "")}</strong> | Side: ${escapeHtml(order.side || "")}</div>
+          <div>Shares: <strong>${order.shares ?? "n/a"}</strong> | Entry: $${order.entry ?? ""} | Stop: $${order.stop ?? ""} | Target: $${order.target ?? ""}</div>
+          <div>Risk: <strong>$${order.risk_dollars ?? "n/a"}</strong></div>
+          <div class="small muted">Order ID: ${escapeHtml(order.order_id || "")} | Status: ${escapeHtml(order.order_status || "")}</div>
+        `;
+        await loadState();
+      } catch (error) {
+        el("submitBtn").disabled = false;
+        el("submitBtn").textContent = "Submit Order";
+        renderError(error.message);
+      }
     }
 
     function renderError(message) {
@@ -740,6 +778,7 @@ INDEX_HTML = r"""<!doctype html>
     el("refreshBtn").addEventListener("click", loadState);
     el("signalFilter").addEventListener("change", renderSignals);
     el("coachBtn").addEventListener("click", coachCheck);
+    el("submitBtn").addEventListener("click", submitOrder);
     el("saveBtn").addEventListener("click", savePlan);
     el("expireBtn").addEventListener("click", expireSignal);
     ["entryPrice", "stopPrice", "targetPrice"].forEach(id => el(id).addEventListener("input", updateRewardRisk));
