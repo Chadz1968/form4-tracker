@@ -5,6 +5,7 @@
 .claude/
 
 # Runtime output
+cache/
 trade_log.json
 trade_log.csv
 daily_summaries.json
