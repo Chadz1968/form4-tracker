@@ -82,11 +82,16 @@ def build_plan_from_payload(payload: dict) -> dict:
     if account_equity in (None, ""):
         account_equity = _latest_account_equity()
 
+    def _require_float(val, name):
+        if val in (None, ""):
+            raise ValueError(f"{name} is required")
+        return float(val)
+
     return journal.create_trade_plan(
         signal,
-        entry_price=float(payload["entry_price"]),
-        stop_price=float(payload["stop_price"]),
-        target_price=float(payload["target_price"]),
+        entry_price=_require_float(payload.get("entry_price"), "Entry"),
+        stop_price=_require_float(payload.get("stop_price"), "Stop"),
+        target_price=_require_float(payload.get("target_price"), "Target"),
         account_equity=float(account_equity) if account_equity not in (None, "") else None,
         setup_grade=payload.get("setup_grade") or None,
         notes=payload.get("notes", ""),
