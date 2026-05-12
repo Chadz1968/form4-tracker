@@ -115,6 +115,25 @@ def update_signal(payload: dict) -> dict:
     return {"ok": True, "signal_id": signal_id, "status": status}
 
 
+def add_signal(payload: dict) -> dict:
+    symbol = str(payload.get("symbol") or "").upper().strip()
+    price = payload.get("price")
+    setup = str(payload.get("setup") or "").strip()
+    if not symbol or not price or not setup:
+        raise ValueError("symbol, price, and setup are required.")
+    signal = journal.ingest_signal({
+        "source": "manual",
+        "symbol": symbol,
+        "timeframe": str(payload.get("timeframe") or "5m"),
+        "setup": setup,
+        "side": "long",
+        "price": float(price),
+        "trigger": "manual_entry",
+        "notes": str(payload.get("notes") or ""),
+    })
+    return {"signal": signal}
+
+
 def submit_order(payload: dict) -> dict:
     import order_executor
     plan = build_plan_from_payload(payload)
@@ -134,6 +153,8 @@ def handle_api(method: str, path: str, payload: dict | None = None) -> tuple[int
             return 201, {"ok": True, **save_trade_plan(payload)}
         if method == "POST" and path == "/api/submit-order":
             return 201, {"ok": True, **submit_order(payload)}
+        if method == "POST" and path == "/api/add-signal":
+            return 201, {"ok": True, **add_signal(payload)}
         if method == "POST" and path == "/api/signal-status":
             return 200, update_signal(payload)
     except (KeyError, TypeError, ValueError) as exc:
@@ -430,16 +451,54 @@ INDEX_HTML = r"""<!doctype html>
     <section class="panel">
       <div class="panel-head">
         <h2>Signal Inbox</h2>
-        <select id="signalFilter" title="Filter signal status">
-          <option value="">All</option>
-          <option value="new">New</option>
-          <option value="planned">Planned</option>
-          <option value="rejected">Rejected</option>
-          <option value="expired">Expired</option>
-          <option value="traded">Traded</option>
-        </select>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="signalFilter" title="Filter signal status">
+            <option value="">All</option>
+            <option value="new">New</option>
+            <option value="planned">Planned</option>
+            <option value="rejected">Rejected</option>
+            <option value="expired">Expired</option>
+            <option value="traded">Traded</option>
+          </select>
+          <button id="addSignalToggle" title="Add a signal you spotted manually">+ Add</button>
+        </div>
       </div>
       <div class="panel-body">
+        <div id="addSignalForm" style="display:none;margin-bottom:12px;padding:10px;background:var(--field);border:1px solid var(--line);border-radius:6px;">
+          <div style="font-weight:700;font-size:12px;color:var(--muted);margin-bottom:8px;">Manual Signal</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted);">Symbol
+              <input id="manualSymbol" placeholder="NVDA" style="text-transform:uppercase">
+            </label>
+            <label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted);">Price
+              <input id="manualPrice" type="number" step="0.01" placeholder="0.00">
+            </label>
+            <label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted);">Setup
+              <select id="manualSetup">
+                <option value="opening_range_breakout">ORB</option>
+                <option value="vwap_reclaim">VWAP Reclaim</option>
+                <option value="vwap_pullback">VWAP Pullback</option>
+                <option value="news_momentum">News Momentum</option>
+                <option value="failed_breakdown_reversal">Failed Breakdown</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted);">Timeframe
+              <select id="manualTimeframe">
+                <option value="1m">1m</option>
+                <option value="5m" selected>5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted);grid-column:1/-1;">Notes
+              <input id="manualNotes" placeholder="Why this setup looks good…">
+            </label>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="primary" id="addSignalSubmit">Add to Inbox</button>
+            <button id="addSignalCancel">Cancel</button>
+          </div>
+        </div>
         <div class="signal-list" id="signalList"></div>
       </div>
     </section>
@@ -781,6 +840,43 @@ INDEX_HTML = r"""<!doctype html>
     el("submitBtn").addEventListener("click", submitOrder);
     el("saveBtn").addEventListener("click", savePlan);
     el("expireBtn").addEventListener("click", expireSignal);
+
+    el("addSignalToggle").addEventListener("click", () => {
+      const form = el("addSignalForm");
+      const visible = form.style.display !== "none";
+      form.style.display = visible ? "none" : "block";
+      if (!visible) el("manualSymbol").focus();
+    });
+    el("addSignalCancel").addEventListener("click", () => {
+      el("addSignalForm").style.display = "none";
+    });
+    el("addSignalSubmit").addEventListener("click", async () => {
+      const btn = el("addSignalSubmit");
+      btn.disabled = true;
+      btn.textContent = "Adding…";
+      try {
+        await api("/api/add-signal", {
+          method: "POST",
+          body: JSON.stringify({
+            symbol:    el("manualSymbol").value,
+            price:     el("manualPrice").value,
+            setup:     el("manualSetup").value,
+            timeframe: el("manualTimeframe").value,
+            notes:     el("manualNotes").value,
+          })
+        });
+        el("manualSymbol").value = "";
+        el("manualPrice").value = "";
+        el("manualNotes").value = "";
+        el("addSignalForm").style.display = "none";
+        await loadState();
+      } catch (err) {
+        alert("Could not add signal: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Add to Inbox";
+      }
+    });
     ["entryPrice", "stopPrice", "targetPrice"].forEach(id => el(id).addEventListener("input", updateRewardRisk));
     loadState().catch(error => {
       el("statusLine").textContent = error.message;
