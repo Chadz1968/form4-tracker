@@ -1,0 +1,7 @@
+{
+  "symbols": ["NVDA", "AMD", "META", "TSLA", "AAPL", "SMCI", "SPY"],
+  "scan_interval_seconds": 60,
+  "opening_range_minutes": 15,
+  "min_relative_volume": 1.5,
+  "vwap_pullback_tolerance_pct": 0.003
+}

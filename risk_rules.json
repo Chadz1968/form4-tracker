@@ -1,0 +1,17 @@
+{
+  "account_currency": "USD",
+  "risk_per_trade_pct": 0.0025,
+  "max_daily_loss_pct": 0.01,
+  "max_trades_per_day": 3,
+  "max_consecutive_losses": 2,
+  "minimum_reward_to_risk": 2.0,
+  "max_position_notional_pct": 0.1,
+  "allow_averaging_down": false,
+  "allow_move_stop_away": false,
+  "block_after_daily_stop": true,
+  "block_after_max_trades": true,
+  "block_after_loss_streak": true,
+  "paper_trades_before_live_review": 80,
+  "min_trades_before_setup_judgement": 20,
+  "min_trades_before_strong_conclusion": 50
+}

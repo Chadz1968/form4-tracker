@@ -81,6 +81,10 @@ backtest_agent.py
 | `risk_agent.py` | Position sizing + Alpaca order submission |
 | `reflector_agent.py` | Trade logging + end-of-day reconciliation + LLM post-mortem |
 | `backtest_agent.py` | Historical signal collection + forward-return computation vs SPY |
+| `trade_manager_journal.py` | Day trading manager signal inbox, trade-plan validation, journal lifecycle, and daily reviews |
+| `alpaca_reconciliation.py` | Alpaca paper account/order/position snapshots and journal reconciliation |
+| `tradingview_webhook.py` | Local TradingView webhook intake server for manager signals |
+| `trade_manager_ui.py` | Local browser UI for reviewing signals, running coach checks, and saving trade plans |
 | `test_llm.py` | Manual LLM integration test (finder + filter + LLM scoring) |
 | `backtest_analysis.ipynb` | Exploratory analysis of backtest results |
 | `edgar_exploration.ipynb` | Early EDGAR API exploration notebook |
@@ -89,6 +93,11 @@ backtest_agent.py
 
 - **Paper trading only.** `config.get_trading_client()` always passes `paper=True`.
   Do not change this without explicit instruction.
+
+- **Day trading manager is coach-first.** `trading_policy.json` keeps live trading
+  and fully automated trading disabled. TradingView alerts populate the signal
+  inbox; they must still pass playbook and risk checks before any future Alpaca
+  paper execution.
 
 - **All secrets via `.env`.** No credentials are hardcoded. `EDGAR_USER_AGENT`
   is required and must be in the form `"Name email@example.com"` per EDGAR policy.

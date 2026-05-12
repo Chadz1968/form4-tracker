@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "approved_setups": [
+    {
+      "id": "opening_range_breakout",
+      "name": "Opening Range Breakout",
+      "description": "Price breaks the first 5- or 15-minute range with volume.",
+      "allowed_sides": [
+        "long"
+      ],
+      "required_conditions": [
+        "relative_volume_high",
+        "market_aligned",
+        "breaks_opening_range",
+        "stop_below_range",
+        "reward_to_risk_at_least_2"
+      ]
+    },
+    {
+      "id": "vwap_reclaim",
+      "name": "VWAP Reclaim",
+      "description": "Price reclaims VWAP after weakness and holds above it.",
+      "allowed_sides": [
+        "long"
+      ],
+      "required_conditions": [
+        "clean_vwap_reclaim",
+        "volume_confirmation",
+        "defined_stop",
+        "reward_to_risk_at_least_2"
+      ]
+    },
+    {
+      "id": "vwap_pullback",
+      "name": "VWAP Pullback",
+      "description": "Trending stock pulls back to VWAP and holds without breaking trend.",
+      "allowed_sides": [
+        "long"
+      ],
+      "required_conditions": [
+        "trend_intact",
+        "controlled_pullback",
+        "vwap_hold",
+        "reward_to_risk_at_least_2"
+      ]
+    },
+    {
+      "id": "news_momentum",
+      "name": "News Momentum",
+      "description": "Liquid stock moves on a fresh catalyst and strong volume.",
+      "allowed_sides": [
+        "long"
+      ],
+      "required_conditions": [
+        "fresh_catalyst",
+        "relative_volume_high",
+        "spread_acceptable",
+        "trend_confirmation",
+        "reward_to_risk_at_least_2"
+      ]
+    },
+    {
+      "id": "failed_breakdown_reversal",
+      "name": "Failed Breakdown Reversal",
+      "description": "Price breaks support then quickly reclaims it, trapping sellers.",
+      "allowed_sides": [
+        "long"
+      ],
+      "required_conditions": [
+        "clear_failed_breakdown",
+        "reclaim_confirmation",
+        "volume_confirmation",
+        "tight_invalidation",
+        "reward_to_risk_at_least_2"
+      ]
+    }
+  ]
+}

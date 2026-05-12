@@ -1,0 +1,14 @@
+{
+  "mode": "paper",
+  "coach_mode": true,
+  "allow_live_trading": false,
+  "allow_fully_automated_trading": false,
+  "require_trade_plan_before_order": true,
+  "require_stop_before_entry": true,
+  "require_target_before_entry": true,
+  "require_setup_tag": true,
+  "approved_brokers": [
+    "alpaca_paper"
+  ],
+  "notes": "Paper-first policy for the day trading manager coach. Live trading and fully automated execution require an explicit future policy change."
+}

@@ -29,6 +29,10 @@ for retail and small enough to be credible.
 
 **Phase 1 — Full agent pipeline built. Backtest pipeline built. Paper trading active.**
 
+Parallel roadmap: [Day Trading Manager Coach](DAY_TRADING_MANAGER_ROADMAP.md)
+defines the planned TradingView + Alpaca workflow for a paper-first trade
+manager, journal, and self-learning coaching layer.
+
 | Agent | File | Status |
 |---|---|---|
 | Finder | `finder_agent.py` | Done |
@@ -153,6 +157,15 @@ python explore_form4.py --date 2025-04-28
 # Scan + filter + LLM scoring (no trading — requires OPENAI_API_KEY)
 python test_llm.py --date 2025-04-28
 
+# Day trading manager: import Alpaca paper account/orders/positions into journal
+python alpaca_reconciliation.py
+
+# Day trading manager: receive TradingView alerts locally
+python tradingview_webhook.py --host 127.0.0.1 --port 8765
+
+# Day trading manager: local signal review and trade-plan UI
+python trade_manager_ui.py --host 127.0.0.1 --port 8787
+
 # Backtest: collect signals over a date range and compute forward returns
 python backtest_agent.py --start 2022-01-01 --end 2024-12-31
 python backtest_agent.py --start 2022-01-01 --end 2024-12-31 --resume    # resume interrupted run
@@ -180,6 +193,7 @@ cp .env.example .env            # fill in your keys
 | `OPENAI_API_KEY` | Full pipeline | GPT-4o scoring in `llm_filter_agent`; GPT-4o-mini post-mortem in `reflector_agent` |
 | `ALPACA_API_KEY` | Full pipeline | Alpaca paper-trading API key |
 | `ALPACA_SECRET_KEY` | Full pipeline | Alpaca paper-trading secret |
+| `TRADINGVIEW_WEBHOOK_SECRET` | Optional manager webhook | Shared secret checked on TradingView webhook requests |
 | `FORM4_EDGAR_WORKERS` | No | Parallel workers for EDGAR fetching (default: `6`) |
 | `FORM4_USE_TODAY_CACHE` | No | Set to `1` or `true` to use cached results for today's date |
 
@@ -221,6 +235,50 @@ Risk constants in `config.py`:
 | `backtest_signals.json` | Checkpoint of raw signals collected per scan date |
 | `backtest_results.csv` | One row per signal with 1w / 4w / 12w returns and SPY alpha |
 | `cache/edgar_raw_YYYY-MM-DD.json` | EDGAR fetch cache per scan date |
+
+## Day Trading Manager Foundation
+
+The TradingView + Alpaca manager roadmap starts with paper-first coach files:
+
+| File | Contents |
+|---|---|
+| `trade_manager_journal.py` | Broker-independent signal inbox, trade plan validation, journal lifecycle, and daily review helpers |
+| `alpaca_reconciliation.py` | Imports Alpaca paper account, positions, orders, and reconciles known journal entries by broker order id |
+| `tradingview_webhook.py` | Local webhook server that validates TradingView alerts and stores them in the signal inbox |
+| `trade_manager_ui.py` | Local browser UI to select signals, draft plans, run coach checks, and save journal entries |
+| `trading_policy.json` | Paper-first safety policy and automation limits |
+| `risk_rules.json` | Day-trading risk limits, max trades, loss streak, and reward/risk rules |
+| `playbook.json` | Approved starter setups such as VWAP reclaim and opening range breakout |
+| `signal_inbox.json` | Stored TradingView-style signals |
+| `trade_journal.json` | Planned/open/closed manager trades |
+| `manager_daily_reviews.json` | Daily coach reviews from the manager journal |
+| `alpaca_account_snapshot.json` | Latest normalized Alpaca account snapshot |
+| `alpaca_positions_snapshot.json` | Latest normalized Alpaca positions snapshot |
+| `alpaca_orders_snapshot.json` | Latest normalized Alpaca order snapshot |
+| `alpaca_reconciliation_log.json` | History of reconciliation runs |
+
+TradingView alerts should POST JSON to `/webhook/tradingview`:
+
+```json
+{
+  "symbol": "AAPL",
+  "timeframe": "5m",
+  "setup": "vwap_reclaim",
+  "side": "long",
+  "price": 190.25,
+  "trigger": "close_above_vwap",
+  "notes": "High relative volume",
+  "alert_id": "optional-unique-id",
+  "bar_time": "optional-bar-time"
+}
+```
+
+If `TRADINGVIEW_WEBHOOK_SECRET` is set, send the same value as the
+`X-Webhook-Secret` header or as a `secret` field in the JSON body.
+
+Open the local manager UI at `http://127.0.0.1:8787`. It reads
+`signal_inbox.json`, lets you select an alert, enter entry/stop/target, runs
+the coach check, and writes the resulting plan to `trade_journal.json`.
 
 ## Tech Stack
 

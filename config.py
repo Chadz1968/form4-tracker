@@ -35,6 +35,15 @@ def get_trading_client():
     )
 
 
+def get_data_client():
+    """Return an Alpaca StockHistoricalDataClient for market data."""
+    from alpaca.data.historical import StockHistoricalDataClient
+    return StockHistoricalDataClient(
+        api_key=ALPACA_API_KEY,
+        secret_key=ALPACA_SECRET_KEY,
+    )
+
+
 def validate():
     """Raise clearly if required config is missing. Call at script startup."""
     missing = []

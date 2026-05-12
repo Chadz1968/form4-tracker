@@ -12,6 +12,13 @@ daily_summaries.json
 hwm.json
 backtest_signals.json
 backtest_results.csv
+signal_inbox.json
+trade_journal.json
+manager_daily_reviews.json
+alpaca_account_snapshot.json
+alpaca_positions_snapshot.json
+alpaca_orders_snapshot.json
+alpaca_reconciliation_log.json
 *.log
 
 # Python
