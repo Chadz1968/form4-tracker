@@ -20,6 +20,7 @@ import datetime as dt
 from datetime import datetime
 
 from finder_agent import fetch_raw_trades
+from keep_awake import keep_system_awake
 
 # ── Thresholds ────────────────────────────────────────────────
 MIN_PURCHASE_VALUE  = 50_000
@@ -183,4 +184,5 @@ if __name__ == "__main__":
         help="Scan date in YYYY-MM-DD format",
     )
     args = parser.parse_args()
-    run(args.date)
+    with keep_system_awake("Form 4 filter scan"):
+        run(args.date)

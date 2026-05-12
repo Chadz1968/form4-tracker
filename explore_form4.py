@@ -10,6 +10,7 @@ import datetime
 
 import config
 from filter_agent import run
+from keep_awake import keep_system_awake
 
 if __name__ == "__main__":
     config.validate()
@@ -24,4 +25,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    run(args.date)
+    with keep_system_awake("Form 4 scan"):
+        run(args.date)

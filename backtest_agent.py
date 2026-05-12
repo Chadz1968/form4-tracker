@@ -28,6 +28,7 @@ import yfinance as yf
 
 import config
 from filter_agent import get_candidates
+from keep_awake import keep_system_awake
 
 _DIR         = os.path.dirname(os.path.abspath(__file__))
 SIGNALS_FILE = os.path.join(_DIR, "backtest_signals.json")
@@ -123,27 +124,28 @@ def collect_signals(
         max_days: Cap the number of dates scanned — useful for smoke-tests.
         resume:   Skip dates already present in the checkpoint file.
     """
-    days = get_trading_days(start, end)
-    if max_days:
-        days = days[:max_days]
+    with keep_system_awake("Form 4 backtest collection"):
+        days = get_trading_days(start, end)
+        if max_days:
+            days = days[:max_days]
 
-    done = _load_done_dates() if resume else set()
-    if not resume and os.path.exists(SIGNALS_FILE):
-        os.remove(SIGNALS_FILE)
+        done = _load_done_dates() if resume else set()
+        if not resume and os.path.exists(SIGNALS_FILE):
+            os.remove(SIGNALS_FILE)
 
-    pending = [d for d in days if d.isoformat() not in done]
-    print(f"[Backtest] {len(days)} trading days | {len(done)} cached | {len(pending)} to scan")
+        pending = [d for d in days if d.isoformat() not in done]
+        print(f"[Backtest] {len(days)} trading days | {len(done)} cached | {len(pending)} to scan")
 
-    for i, day in enumerate(pending, 1):
-        date_str = day.isoformat()
-        print(f"\n[Backtest] [{i}/{len(pending)}] Scanning {date_str}...")
-        signals = _scan_date(date_str)
-        # Always write a record for this date so resume skips it correctly
-        _append_records(signals if signals else [{"scan_date": date_str, "_empty": True}])
-        print(f"[Backtest] {date_str} — {len(signals)} signals saved")
-        time.sleep(delay)
+        for i, day in enumerate(pending, 1):
+            date_str = day.isoformat()
+            print(f"\n[Backtest] [{i}/{len(pending)}] Scanning {date_str}...")
+            signals = _scan_date(date_str)
+            # Always write a record for this date so resume skips it correctly
+            _append_records(signals if signals else [{"scan_date": date_str, "_empty": True}])
+            print(f"[Backtest] {date_str} — {len(signals)} signals saved")
+            time.sleep(delay)
 
-    print(f"\n[Backtest] Collection complete. Checkpoint: {SIGNALS_FILE}")
+        print(f"\n[Backtest] Collection complete. Checkpoint: {SIGNALS_FILE}")
 
 
 # ── Return calculation ────────────────────────────────────────
@@ -188,37 +190,38 @@ def build_results(end: str) -> pd.DataFrame:
     Load the checkpoint, compute forward returns for every signal, write
     backtest_results.csv, and return the results DataFrame.
     """
-    if not os.path.exists(SIGNALS_FILE):
-        print(f"[Backtest] Checkpoint not found: {SIGNALS_FILE}. Run collect_signals first.")
-        return pd.DataFrame()
+    with keep_system_awake("Form 4 backtest return build"):
+        if not os.path.exists(SIGNALS_FILE):
+            print(f"[Backtest] Checkpoint not found: {SIGNALS_FILE}. Run collect_signals first.")
+            return pd.DataFrame()
 
-    with open(SIGNALS_FILE) as f:
-        raw = json.load(f)
+        with open(SIGNALS_FILE) as f:
+            raw = json.load(f)
 
-    signals = [s for s in raw if not s.get("_empty")]
-    if not signals:
-        print("[Backtest] No signals in checkpoint.")
-        return pd.DataFrame()
+        signals = [s for s in raw if not s.get("_empty")]
+        if not signals:
+            print("[Backtest] No signals in checkpoint.")
+            return pd.DataFrame()
 
-    df    = pd.DataFrame(signals)
-    start = df["scan_date"].min()
-    print(f"[Backtest] {len(df):,} signals across {df['scan_date'].nunique()} dates")
+        df    = pd.DataFrame(signals)
+        start = df["scan_date"].min()
+        print(f"[Backtest] {len(df):,} signals across {df['scan_date'].nunique()} dates")
 
-    prices = _download_prices(df["ticker"].unique().tolist(), start, end)
+        prices = _download_prices(df["ticker"].unique().tolist(), start, end)
 
-    print("[Backtest] Computing forward returns...")
-    for label, days in HOLD_DAYS.items():
-        df[f"ret_{label}"]     = df.apply(
-            lambda r: _fwd_return(prices, r["ticker"], r["scan_date"], days), axis=1
-        )
-        df[f"spy_ret_{label}"] = df.apply(
-            lambda r: _fwd_return(prices, "SPY", r["scan_date"], days), axis=1
-        )
-        df[f"alpha_{label}"]   = df[f"ret_{label}"] - df[f"spy_ret_{label}"]
+        print("[Backtest] Computing forward returns...")
+        for label, days in HOLD_DAYS.items():
+            df[f"ret_{label}"]     = df.apply(
+                lambda r: _fwd_return(prices, r["ticker"], r["scan_date"], days), axis=1
+            )
+            df[f"spy_ret_{label}"] = df.apply(
+                lambda r: _fwd_return(prices, "SPY", r["scan_date"], days), axis=1
+            )
+            df[f"alpha_{label}"]   = df[f"ret_{label}"] - df[f"spy_ret_{label}"]
 
-    df.to_csv(RESULTS_FILE, index=False)
-    print(f"[Backtest] Results written to {RESULTS_FILE} ({len(df):,} rows)")
-    return df
+        df.to_csv(RESULTS_FILE, index=False)
+        print(f"[Backtest] Results written to {RESULTS_FILE} ({len(df):,} rows)")
+        return df
 
 
 # ── Convenience wrapper ───────────────────────────────────────
